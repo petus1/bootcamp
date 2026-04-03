@@ -10,6 +10,25 @@
 </head>
 <body>
 
+<div id="auth-overlay" class="auth-overlay" hidden>
+  <div class="auth-card">
+    <div class="auth-brand">Худеем на здоровье</div>
+    <p class="auth-sub">Войдите или создайте аккаунт — данные синхронизируются с сервером.</p>
+    <div id="auth-error" class="auth-error" role="alert" hidden></div>
+    <label class="auth-label">Email</label>
+    <input type="email" id="auth-email" class="auth-input" placeholder="you@example.com" autocomplete="username">
+    <label class="auth-label">Пароль</label>
+    <input type="password" id="auth-password" class="auth-input" placeholder="Не менее 6 символов" autocomplete="current-password">
+    <label class="auth-label" id="auth-name-wrap" hidden>Имя</label>
+    <input type="text" id="auth-name" class="auth-input" hidden placeholder="Как к вам обращаться?">
+    <div class="auth-actions">
+      <button type="button" class="auth-btn auth-btn-primary" id="auth-submit">Войти</button>
+      <button type="button" class="auth-btn auth-btn-ghost" id="auth-toggle">Регистрация</button>
+    </div>
+    <button type="button" class="auth-demo" id="auth-demo">Быстрый демо-вход</button>
+  </div>
+</div>
+
 <div class="device-switcher">
   <button type="button" class="device-btn active" data-device="phone" onclick="setDevice('phone')">📱 Телефон</button>
   <button type="button" class="device-btn" data-device="tablet" onclick="setDevice('tablet')">📋 Планшет</button>

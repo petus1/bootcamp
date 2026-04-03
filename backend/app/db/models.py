@@ -29,6 +29,7 @@ class ChatMessage(Base):
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     text: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(80), default="Общее")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
 

@@ -177,8 +177,39 @@ let activeTrackingSessionId = null;
 let currentUserId = null;
 let progressSummary = { messages_sent: 0, points_recorded: 0 };
 let livePoint = null;
+let chartSeriesFromApi = null;
+let geoWatchId = null;
+let lastTrackSent = 0;
+let trackingUiTimer = null;
+let videoCatIndex = 0;
+let aiChatMessages = [
+  { role: "bot", category: "Приветствие", html: "Привет! Я подскажу по питанию, активности и привычкам. Выберите тему ниже или напишите вопрос." },
+];
+
+const MESSAGE_CATEGORIES = ["Общее", "Спорт", "Питание", "Мотивация", "Советы", "Рецепт"];
 
 const API_BASE = window.API_BASE || "http://127.0.0.1:8000/api/v1";
+
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+
+function getProgressSeries() {
+  if (chartSeriesFromApi) {
+    return {
+      labels: chartSeriesFromApi.labels,
+      weight: chartSeriesFromApi.weight,
+      calories: chartSeriesFromApi.calories,
+      movement: chartSeriesFromApi.movement,
+      steps: chartSeriesFromApi.steps,
+      distance: chartSeriesFromApi.distance,
+      activityTime: chartSeriesFromApi.activity_time,
+    };
+  }
+  return progressSeries;
+}
 
 function getFriend(id) { return friends.find(f => f.id === id); }
 
@@ -205,32 +236,184 @@ async function apiFetch(path, options = {}) {
   return text ? JSON.parse(text) : {};
 }
 
-async function ensureAuth() {
-  if (authToken) {
-    try {
-      const me = await apiFetch("/auth/me");
-      currentUserId = me.id;
-      return;
-    } catch (_) {}
-  }
-  const demoEmail = "demo@bootcamp.local";
-  const demoPassword = "demo1234";
-  try {
-    const registered = await apiFetch("/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ email: demoEmail, password: demoPassword, name: user.name }),
-    });
-    authToken = registered.access_token;
-  } catch (_) {
-    const logged = await apiFetch("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email: demoEmail, password: demoPassword }),
-    });
-    authToken = logged.access_token;
-  }
-  localStorage.setItem("bootcamp_token", authToken);
+async function syncUserFromApi() {
   const me = await apiFetch("/auth/me");
   currentUserId = me.id;
+  user.name = me.name;
+  user.email = me.email;
+  user.avatar = me.avatar;
+  user.avatarColor = me.avatar_color;
+}
+
+async function tryResumeSession() {
+  if (!authToken) return false;
+  try {
+    await syncUserFromApi();
+    return true;
+  } catch (_) {
+    authToken = "";
+    localStorage.removeItem("bootcamp_token");
+    return false;
+  }
+}
+
+function setAuthVisible(visible) {
+  const o = document.getElementById("auth-overlay");
+  if (o) o.hidden = !visible;
+}
+
+async function loadFriendsFromApi() {
+  try {
+    const rows = await apiFetch("/users");
+    friends = rows.map((r) => ({
+      id: String(r.id),
+      name: r.name,
+      avatar: r.avatar,
+      avatarColor: r.avatar_color,
+      flames: 15 + (r.id % 50),
+      recordFlames: 20 + (r.id % 40),
+      todayActive: true,
+    }));
+  } catch (_) {}
+}
+
+async function loadChartSeries() {
+  try {
+    chartSeriesFromApi = await apiFetch("/progress/chart-series");
+  } catch (_) {
+    chartSeriesFromApi = null;
+  }
+}
+
+async function afterLogin() {
+  connectWs();
+  await Promise.all([
+    loadFriendsFromApi(),
+    loadChatListFromApi(),
+    loadProgressSummary(),
+    loadChartSeries(),
+    refreshLivePoint(),
+  ]);
+  renderNav();
+  renderHeader();
+  renderContent();
+  const appEl = document.getElementById("app");
+  if (appEl) appEl.style.background = tabGradients[currentTab] || tabGradients.community;
+}
+
+function initAuthUI() {
+  const submit = document.getElementById("auth-submit");
+  const toggle = document.getElementById("auth-toggle");
+  const demo = document.getElementById("auth-demo");
+  const nameWrap = document.getElementById("auth-name-wrap");
+  const nameInput = document.getElementById("auth-name");
+  let isReg = false;
+  const errEl = document.getElementById("auth-error");
+
+  function showErr(t) {
+    if (!errEl) return;
+    if (t) {
+      errEl.textContent = t;
+      errEl.hidden = false;
+    } else {
+      errEl.hidden = true;
+    }
+  }
+
+  function syncToggleUi() {
+    if (submit) submit.textContent = isReg ? "Создать аккаунт" : "Войти";
+    if (toggle) toggle.textContent = isReg ? "Уже есть аккаунт" : "Регистрация";
+    if (nameWrap) nameWrap.hidden = !isReg;
+    if (nameInput) nameInput.hidden = !isReg;
+  }
+
+  toggle?.addEventListener("click", () => {
+    isReg = !isReg;
+    syncToggleUi();
+    showErr("");
+  });
+  syncToggleUi();
+
+  async function doAuth() {
+    const email = document.getElementById("auth-email")?.value?.trim();
+    const password = document.getElementById("auth-password")?.value || "";
+    const name = document.getElementById("auth-name")?.value?.trim() || "Пользователь";
+    showErr("");
+    if (!email || password.length < 6) {
+      showErr("Введите email и пароль не короче 6 символов.");
+      return;
+    }
+    try {
+      if (isReg) {
+        const r = await apiFetch("/auth/register", {
+          method: "POST",
+          body: JSON.stringify({ email, password, name }),
+        });
+        authToken = r.access_token;
+      } else {
+        const r = await apiFetch("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ email, password }),
+        });
+        authToken = r.access_token;
+      }
+      localStorage.setItem("bootcamp_token", authToken);
+      await syncUserFromApi();
+      setAuthVisible(false);
+      await afterLogin();
+    } catch (e) {
+      showErr(e.message || "Ошибка входа");
+    }
+  }
+
+  submit?.addEventListener("click", doAuth);
+
+  demo?.addEventListener("click", async () => {
+    showErr("");
+    const demoEmail = "demo@bootcamp.local";
+    const demoPassword = "demo1234";
+    try {
+      try {
+        const r = await apiFetch("/auth/register", {
+          method: "POST",
+          body: JSON.stringify({ email: demoEmail, password: demoPassword, name: user.name }),
+        });
+        authToken = r.access_token;
+      } catch (_) {
+        const r = await apiFetch("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ email: demoEmail, password: demoPassword }),
+        });
+        authToken = r.access_token;
+      }
+      localStorage.setItem("bootcamp_token", authToken);
+      await syncUserFromApi();
+      setAuthVisible(false);
+      await afterLogin();
+    } catch (e) {
+      showErr(e.message || "Демо недоступно. Запустите backend.");
+    }
+  });
+}
+
+function logout() {
+  authToken = "";
+  localStorage.removeItem("bootcamp_token");
+  chatList = [];
+  chatMsgs = [];
+  chartSeriesFromApi = null;
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  if (geoWatchId != null) {
+    navigator.geolocation.clearWatch(geoWatchId);
+    geoWatchId = null;
+  }
+  setAuthVisible(true);
+  renderNav();
+  renderHeader();
+  renderContent();
 }
 
 function connectWs() {
@@ -249,10 +432,24 @@ function connectWs() {
           chatMsgs.push({
             from: String(msg.sender_id) === String(currentUserId) ? "me" : "them",
             text: msg.text,
+            category: msg.category || "Общее",
             time: new Date(msg.created_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
           });
           renderContent();
+          const msgsEl = document.getElementById("msgs");
+          if (msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
         }
+        loadChatListFromApi().then(() => {
+          if (currentTab === "community" && communitySubTab === "chats" && !currentDialog) renderContent();
+        });
+      }
+      if (payload.type === "tracking:position_update") {
+        const d = payload.data;
+        livePoint = { lat: d.lat, lon: d.lon, accuracy: d.accuracy, speed: d.speed };
+        clearTimeout(trackingUiTimer);
+        trackingUiTimer = setTimeout(() => {
+          if (currentTab === "progress") renderContent();
+        }, 350);
       }
     } catch (_) {}
   };
@@ -270,34 +467,62 @@ async function refreshLivePoint() {
   } catch (_) {}
 }
 
+async function sendTrackPoint(position) {
+  await apiFetch("/tracking/point", {
+    method: "POST",
+    body: JSON.stringify({
+      lat: position.coords.latitude,
+      lon: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      speed: position.coords.speed,
+    }),
+  });
+  await refreshLivePoint();
+  await loadProgressSummary();
+  await loadChartSeries();
+  if (currentTab === "progress") renderContent();
+}
+
 async function startTracking() {
-  if (!navigator.geolocation) return;
+  if (!navigator.geolocation) {
+    alert("Геолокация недоступна в этом браузере.");
+    return;
+  }
   try {
     const started = await apiFetch("/tracking/start", { method: "POST" });
     activeTrackingSessionId = started.session_id;
   } catch (_) {
     return;
   }
-  navigator.geolocation.getCurrentPosition(async (position) => {
-    try {
-      await apiFetch("/tracking/point", {
-        method: "POST",
-        body: JSON.stringify({
-          lat: position.coords.latitude,
-          lon: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          speed: position.coords.speed,
-        }),
-      });
-      await refreshLivePoint();
-      await loadProgressSummary();
-      renderContent();
-    } catch (_) {}
-  });
+  lastTrackSent = 0;
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      try {
+        await sendTrackPoint(pos);
+      } catch (_) {}
+    },
+    () => {},
+    { enableHighAccuracy: true, maximumAge: 5000 }
+  );
+  if (geoWatchId != null) navigator.geolocation.clearWatch(geoWatchId);
+  geoWatchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const now = Date.now();
+      if (now - lastTrackSent < 12000) return;
+      lastTrackSent = now;
+      sendTrackPoint(pos).catch(() => {});
+    },
+    () => {},
+    { enableHighAccuracy: true, maximumAge: 10000 }
+  );
 }
 
 async function stopTracking() {
   activeTrackingSessionId = null;
+  if (geoWatchId != null) {
+    navigator.geolocation.clearWatch(geoWatchId);
+    geoWatchId = null;
+  }
   try {
     await apiFetch("/tracking/stop", { method: "POST" });
   } catch (_) {}
@@ -406,7 +631,11 @@ function switchTab(id) {
   if (app) app.style.background = tabGradients[id] || tabGradients.community;
   renderNav();
   renderHeader();
-  renderContent();
+  if (id === "progress" && authToken) {
+    Promise.all([loadChartSeries(), loadProgressSummary()]).then(() => renderContent());
+  } else {
+    renderContent();
+  }
   const navEl = document.getElementById('nav');
   if (navEl) navEl.style.display = 'flex';
 }
@@ -476,7 +705,8 @@ function renderProfile() {
     </div>
     <h3 style="font-size:18px;font-weight:700;margin-bottom:16px">Основные данные</h3>
     ${[["Пол","Мужской"],["Возраст","18 лет"],["Рост","173 см"],["Вес","90.0 кг"],["ИМТ","30,1 кг/м²"],["Цель","Снизить вес"]].map(([l,v],i)=>`<div style="display:flex;justify-content:space-between;padding:14px 0;${i<5?'border-bottom:1px solid var(--border)':''}"><span style="font-size:15px">${l}</span><span style="font-size:15px;font-weight:500">${v}</span></div>`).join('')}
-    <button style="width:100%;padding:14px;border-radius:28px;border:1px solid var(--border);background:var(--card);font-size:15px;font-weight:500;cursor:pointer;margin-top:8px">Изменить цель</button>
+    <button type="button" style="width:100%;padding:14px;border-radius:28px;border:1px solid var(--border);background:var(--card);font-size:15px;font-weight:500;cursor:pointer;margin-top:8px">Изменить цель</button>
+    <button type="button" class="auth-btn auth-btn-ghost" style="width:100%;margin-top:12px" onclick="logout()">Выйти из аккаунта</button>
   </div>`;
 }
 
@@ -495,21 +725,82 @@ function renderDiary() {
   </div>`;
 }
 
+const AI_QUICK = {
+  Питание: "Держите дефицит 300–500 ккал, белок 1.6–2 г/кг, больше овощей и воды.",
+  Активность: "Сочетайте шаги 8–10 тыс. и 2–3 силовые в неделю по 30–45 мин.",
+  Сон: "Ложитесь в одно время, экраны за час до сна, прохладная комната.",
+  Мотивация: "Маленькие цели на неделю лучше, чем «идеал через месяц».",
+  Привычки: "Один триггер: после завтрака — стакан воды; после обеда — 10 минут ходьбы.",
+};
+
+function aiQuickReply(category) {
+  const tip = AI_QUICK[category] || "Запишите вопрос в поле ниже — подскажу по шагам.";
+  aiChatMessages.push({ role: "user", category, text: `Тема: ${category}` });
+  aiChatMessages.push({ role: "bot", category: "Ответ", html: tip });
+  renderContent();
+  setTimeout(() => {
+    const el = document.getElementById("ai-chat-scroll");
+    if (el) el.scrollTop = el.scrollHeight;
+  }, 50);
+}
+
+function aiSendUserMessage() {
+  const inp = document.getElementById("ai-chat-input");
+  if (!inp || !inp.value.trim()) return;
+  const text = inp.value.trim();
+  inp.value = "";
+  aiChatMessages.push({ role: "user", category: "Вопрос", text });
+  const low = text.toLowerCase();
+  let reply = "Продолжайте вести дневник — так проще видеть прогресс.";
+  if (/вес|ккал|еда|питание/.test(low)) reply = AI_QUICK["Питание"];
+  else if (/шаг|бег|трен|спорт/.test(low)) reply = AI_QUICK["Активность"];
+  else if (/сон|спать/.test(low)) reply = AI_QUICK["Сон"];
+  aiChatMessages.push({ role: "bot", category: "Ответ", html: reply });
+  renderContent();
+  setTimeout(() => {
+    const el = document.getElementById("ai-chat-scroll");
+    if (el) el.scrollTop = el.scrollHeight;
+  }, 50);
+}
+
 function renderAIChat() {
-  const msgs=["Привет, Никита! 👋 Подготовил рекомендации:","<b>Питание:</b><br>• План с дефицитом калорий (-1 кг/нед)<br>• Подбор продуктов и рецептов","<b>Активность:</b><br>• Тренировки средней интенсивности<br>• Увеличение нагрузки","<b>Сон:</b><br>• Целевой показатель — 9 часов","<b>Психическое здоровье:</b><br>• Управление стрессом"];
-  return `<div style="flex:1;overflow-y:auto;padding:16px">${msgs.map(m=>`<div class="card" style="margin-bottom:10px;font-size:14px;line-height:1.6">${m}</div>`).join('')}</div>
+  const chips = ["Питание", "Активность", "Сон", "Мотивация", "Привычки"];
+  const body = aiChatMessages
+    .map((m) => {
+      if (m.role === "bot") {
+        return `<div class="card" style="margin-bottom:10px;font-size:14px;line-height:1.6;border-left:3px solid var(--teal)">
+          ${m.category ? `<div class="msg-cat">${escapeHtml(m.category)}</div>` : ""}
+          <div>${m.html}</div>
+        </div>`;
+      }
+      return `<div style="text-align:right;margin-bottom:8px"><span style="display:inline-block;background:var(--teal-light);padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;text-align:left;max-width:92%">
+        ${m.category ? `<div class="msg-cat" style="text-align:left">${escapeHtml(m.category)}</div>` : ""}
+        ${escapeHtml(m.text)}
+      </span></div>`;
+    })
+    .join("");
+  return `<div id="ai-chat-scroll" style="flex:1;overflow-y:auto;padding:16px">
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+      ${chips.map((c) => `<button type="button" class="chip chip-sm" onclick="aiQuickReply('${c}')">${c}</button>`).join("")}
+    </div>
+    ${body}
+  </div>
   <div style="border-top:1px solid var(--border);padding:10px 16px;background:var(--card)">
-    <div style="display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:28px;padding:8px 14px"><span style="flex:1;font-size:14px;color:var(--text2)">Задать другой вопрос...</span></div>
-    <p style="font-size:11px;color:var(--text2);text-align:center;margin-top:8px">ИИ-ассистент не ставит диагноз и не заменяет врача</p>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="ai-chat-input" class="auth-input" style="margin:0;flex:1;padding:10px 14px;border-radius:20px;font-size:14px" placeholder="Напишите вопрос..." onkeydown="if(event.key==='Enter')aiSendUserMessage()">
+      <button type="button" class="auth-btn auth-btn-primary" style="padding:10px 16px;border-radius:20px" onclick="aiSendUserMessage()">Отправить</button>
+    </div>
+    <p style="font-size:11px;color:var(--text2);text-align:center;margin-top:8px">Подсказки носят общий характер и не заменяют врача.</p>
   </div>`;
 }
 
 function renderProgress() {
+  const ps = getProgressSeries();
   const seriesByMetric = {
-    weight: { label: "Вес", unit: "кг", values: progressSeries.weight, color: "#2BC4A7", targetText: "Цель: 70 кг", precision: 1 },
-    calories: { label: "Калории", unit: "ккал", values: progressSeries.calories, color: "#FF9800", targetText: "Дефицит: 1800 ккал/день", precision: 0 },
-    movement: { label: "Движение", unit: "мин", values: progressSeries.movement, color: "#9C27B0", targetText: "Цель: 60 мин/день", precision: 0 },
-    steps: { label: "Шаги", unit: "", values: progressSeries.steps, color: "#3F51B5", targetText: "Цель: 10 000 шагов", precision: 0 },
+    weight: { label: "Вес", unit: "кг", values: ps.weight, color: "#2BC4A7", targetText: "Цель: 70 кг", precision: 1 },
+    calories: { label: "Калории", unit: "ккал", values: ps.calories, color: "#FF9800", targetText: "Дефицит: 1800 ккал/день", precision: 0 },
+    movement: { label: "Движение", unit: "мин", values: ps.movement, color: "#9C27B0", targetText: "Цель: 60 мин/день", precision: 0 },
+    steps: { label: "Шаги", unit: "", values: ps.steps, color: "#3F51B5", targetText: "Цель: 10 000 шагов", precision: 0 },
   };
   const active = seriesByMetric[progressMetric] || seriesByMetric.weight;
   const values = active.values;
@@ -526,7 +817,7 @@ function renderProgress() {
   const trend = latest - prev;
   const trendText = `${trend >= 0 ? "+" : ""}${trend.toFixed(active.precision)} ${active.unit}`.trim();
 
-  const bars = progressSeries.activityTime.map((v, i) => {
+  const bars = ps.activityTime.map((v, i) => {
     const h = Math.max(10, (v / 75) * 90);
     const x = 20 + i * 45;
     return `<rect x="${x}" y="${104 - h}" width="24" height="${h}" rx="6" fill="${i === 6 ? '#2BC4A7' : '#CFECE3'}"></rect>`;
@@ -539,23 +830,27 @@ function renderProgress() {
     <h2 style="font-size:20px;font-weight:700;margin-bottom:4px">Снижение веса</h2>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Срок программы 20 недель</p>
     <div style="font-size:14px;line-height:1.8;margin-bottom:12px">
-      Вес: <strong>${progressSeries.weight[6].toFixed(1)} кг</strong><br>
-      Движение: <strong>${progressSeries.movement[6]} мин/день</strong><br>
-      Шаги: <strong>${progressSeries.steps[6].toLocaleString('ru-RU')} в день</strong>
+      Вес: <strong>${ps.weight[6].toFixed(1)} кг</strong><br>
+      Движение: <strong>${ps.movement[6]} мин/день</strong><br>
+      Шаги: <strong>${ps.steps[6].toLocaleString('ru-RU')} в день</strong>
     </div>
     <div class="card" style="margin-bottom:12px">
-      <div style="font-weight:700;font-size:14px;margin-bottom:8px">Live-данные backend</div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:8px">Трекинг и API</div>
+      <div class="tracking-strip" style="margin-bottom:8px">
+        <span>Сообщений: <strong class="tracking-live">${progressSummary.messages_sent || 0}</strong></span>
+        <span>Точек GPS: <strong class="tracking-live">${progressSummary.points_recorded || 0}</strong></span>
+        ${activeTrackingSessionId ? '<span class="tracking-live">● запись</span>' : ""}
+      </div>
       <div style="font-size:13px;line-height:1.7;color:var(--text2)">
-        Отправлено сообщений: <strong style="color:var(--text)">${progressSummary.messages_sent || 0}</strong><br>
-        Точек маршрута: <strong style="color:var(--text)">${progressSummary.points_recorded || 0}</strong><br>
         Последняя позиция:
         <strong style="color:var(--text)">
-          ${livePoint ? `${Number(livePoint.lat).toFixed(5)}, ${Number(livePoint.lon).toFixed(5)}` : "нет данных"}
+          ${livePoint ? `${Number(livePoint.lat).toFixed(5)}, ${Number(livePoint.lon).toFixed(5)}` : "нет данных — нажмите «Старт»"}
         </strong>
       </div>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="chip chip-sm active" onclick="startTracking()">Старт трекинга</button>
-        <button class="chip chip-sm" onclick="stopTracking()">Стоп</button>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button type="button" class="chip chip-sm active" onclick="startTracking()">Старт трекинга</button>
+        <button type="button" class="chip chip-sm" onclick="stopTracking()">Стоп</button>
+        <button type="button" class="chip chip-sm" onclick="loadChartSeries().then(()=>renderContent())">Обновить графики</button>
       </div>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg><span style="font-size:14px;font-weight:500">Текущая неделя</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
@@ -576,7 +871,7 @@ function renderProgress() {
             <stop offset="100%" stop-color="${active.color}" stop-opacity="0.02"></stop>
           </linearGradient>
         </defs>
-        ${progressSeries.labels.map((_, i) => `<line x1="${20 + i * 45}" y1="20" x2="${20 + i * 45}" y2="130" stroke="#EEF5F3" stroke-width="1"></line>`).join("")}
+        ${ps.labels.map((_, i) => `<line x1="${20 + i * 45}" y1="20" x2="${20 + i * 45}" y2="130" stroke="#EEF5F3" stroke-width="1"></line>`).join("")}
         <polyline fill="url(#metricFill-${progressMetric})" stroke="none" points="${points} 290,130 20,130"></polyline>
         <polyline fill="none" stroke="${active.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>
         ${values.map((v, i) => {
@@ -584,7 +879,7 @@ function renderProgress() {
           const y = 130 - ((v - min) / range) * 88;
           return `<circle cx="${x}" cy="${y}" r="${i===6?5:3.5}" fill="${i===6?active.color:'#fff'}" stroke="${active.color}" stroke-width="2"></circle>`;
         }).join("")}
-        ${progressSeries.labels.map((d, i) => `<text x="${20 + i * 45}" y="151" text-anchor="middle" font-size="10" fill="${i===6?'#2BC4A7':'#8A9491'}">${d}</text>`).join("")}
+        ${ps.labels.map((d, i) => `<text x="${20 + i * 45}" y="151" text-anchor="middle" font-size="10" fill="${i===6?'#2BC4A7':'#8A9491'}">${d}</text>`).join("")}
       </svg>
     </div>
 
@@ -594,7 +889,7 @@ function renderProgress() {
       <svg width="100%" viewBox="0 0 320 120" preserveAspectRatio="none" style="height:125px">
         <line x1="14" y1="104" x2="306" y2="104" stroke="#E5EFEC"></line>
         ${bars}
-        ${progressSeries.labels.map((d, i) => `<text x="${32 + i * 45}" y="116" text-anchor="middle" font-size="10" fill="#8A9491">${d}</text>`).join("")}
+        ${ps.labels.map((d, i) => `<text x="${32 + i * 45}" y="116" text-anchor="middle" font-size="10" fill="#8A9491">${d}</text>`).join("")}
       </svg>
     </div>
 
@@ -610,7 +905,7 @@ function renderProgress() {
         </svg>
       </div>
       <div class="route-stats">
-        <div class="route-stat"><div class="route-stat-k">Путь</div><div class="route-stat-v">${progressSeries.distance[6].toFixed(1)} км</div></div>
+        <div class="route-stat"><div class="route-stat-k">Путь</div><div class="route-stat-v">${ps.distance[6].toFixed(1)} км</div></div>
         <div class="route-stat"><div class="route-stat-k">Время</div><div class="route-stat-v">01:14:00</div></div>
         <div class="route-stat"><div class="route-stat-k">Темп</div><div class="route-stat-v">9:52 /км</div></div>
       </div>
@@ -620,14 +915,19 @@ function renderProgress() {
 
 function setProgressMetric(metric) {
   progressMetric = metric;
-  renderContent();
+  requestAnimationFrame(() => renderContent());
+}
+
+function setVideoCat(i) {
+  videoCatIndex = i;
+  requestAnimationFrame(() => renderContent());
 }
 
 function renderVideo() {
   const cats=["Все видео","Руки и плечи","Спина","Грудь"];
   const vids=[{title:"Собака мордой вниз",dur:"00:13"},{title:"Прыжки с махами рук",dur:"00:13"},{title:"Приседание и подъем ног",dur:"00:13"}];
   return `<div style="padding:0 16px 24px">
-    <div style="display:flex;gap:8px;margin:16px 0;overflow-x:auto">${cats.map((c,i)=>`<button class="chip ${i===0?'active':''}">${c}</button>`).join('')}</div>
+    <div class="video-cat-row" style="display:flex;gap:8px;margin:16px 0;overflow-x:auto">${cats.map((c,i)=>`<button type="button" class="chip ${i===videoCatIndex?'active':''}" onclick="setVideoCat(${i})">${c}</button>`).join('')}</div>
     ${vids.map(v=>`<div style="background:#F0EDE5;border-radius:16px;margin-bottom:12px;height:180px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center"><span style="font-size:48px;opacity:0.3">🏋️</span><div style="position:absolute;top:12px;left:12px;background:#2BC4A7DD;color:#fff;padding:4px 12px;border-radius:8px;font-size:13px;font-weight:500">${v.title}</div><div style="position:absolute;bottom:12px;left:12px;background:#2BC4A7DD;color:#fff;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:600">${v.dur}</div></div>`).join('')}
   </div>`;
 }
@@ -700,6 +1000,7 @@ async function loadChatListFromApi() {
     chatList = rows.map((r) => ({
       userId: String(r.user_id),
       lastMsg: r.last_message,
+      lastCategory: r.last_message_category || "Общее",
       time: new Date(r.last_message_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
       unread: 0,
     }));
@@ -712,6 +1013,7 @@ async function loadDialogFromApi(userId) {
     chatMsgs = rows.map((r) => ({
       from: String(r.sender_id) === String(currentUserId) ? "me" : "them",
       text: r.text,
+      category: r.category || "Общее",
       time: new Date(r.created_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
     }));
   } catch (_) {}
@@ -726,7 +1028,7 @@ function renderChatItems(query) {
     <div class="chat-avatar"><div class="letter-ava" style="width:48px;height:48px;font-size:20px;background:${u.avatarColor}">${u.avatar}</div>${u.todayActive?'<div class="today-dot" style="top:2px;right:2px"></div>':''}${u.flames>0?`<div class="chat-streak-badge">🔥${u.flames}</div>`:''}</div>
     <div style="flex:1;min-width:0">
       <div style="display:flex;justify-content:space-between"><span class="chat-name">${u.name}</span><span class="chat-time">${c.time}</span></div>
-      <div style="display:flex;justify-content:space-between;margin-top:2px"><span class="chat-last">${c.lastMsg}</span>${c.unread>0?`<span class="chat-unread">${c.unread}</span>`:''}</div>
+      <div style="display:flex;justify-content:space-between;margin-top:2px;align-items:center;gap:6px"><span class="msg-cat" style="flex-shrink:0">${escapeHtml(c.lastCategory || "Общее")}</span><span class="chat-last" style="flex:1;min-width:0">${escapeHtml(c.lastMsg)}</span>${c.unread>0?`<span class="chat-unread">${c.unread}</span>`:''}</div>
     </div>
   </div>`}).join('') || '<div style="padding:40px;text-align:center;color:var(--text2);font-size:14px">Ничего не найдено</div>';
 }
@@ -745,11 +1047,16 @@ function renderDialog() {
       <div><div style="font-weight:600;font-size:15px">${u.name}</div><div style="font-size:11px;color:var(--streak-or);font-weight:600">🔥 Серия: ${u.flames} дней</div></div>
     </div>
     <div class="dialog-messages" id="msgs">
-      ${chatMsgs.map(m=>`<div class="msg ${m.from}"><div class="msg-bubble">${m.text}</div><div class="msg-time">${m.time}</div></div>`).join('')}
+      ${chatMsgs.map(m=>`<div class="msg ${m.from}">${m.category ? `<div class="msg-cat">${escapeHtml(m.category)}</div>` : ''}<div class="msg-bubble">${escapeHtml(m.text)}</div><div class="msg-time">${m.time}</div></div>`).join('')}
     </div>
-    <div class="dialog-input">
-      <input id="msg-input" placeholder="Сообщение..." onkeydown="if(event.key==='Enter')sendMsg()">
-      <button onclick="sendMsg()">${iconSvg('send')}</button>
+    <div class="dialog-input-row">
+      <select id="msg-category" class="dialog-category" aria-label="Категория">
+        ${MESSAGE_CATEGORIES.map((c) => `<option value="${String(c).replace(/"/g, "&quot;")}">${escapeHtml(c)}</option>`).join("")}
+      </select>
+      <div class="dialog-input" style="border-top:none;padding:0">
+        <input id="msg-input" placeholder="Сообщение..." onkeydown="if(event.key==='Enter')sendMsg()">
+        <button type="button" onclick="sendMsg()">${iconSvg('send')}</button>
+      </div>
     </div>`;
 }
 
@@ -791,16 +1098,18 @@ function closeDialog() {
 
 async function sendMsg() {
   const input = document.getElementById('msg-input');
+  const catEl = document.getElementById('msg-category');
   if (!input || !input.value.trim()) return;
   const text = input.value.trim();
+  const category = (catEl && catEl.value) || "Общее";
   const time = new Date().toLocaleTimeString('ru', { hour:'2-digit', minute:'2-digit' });
-  chatMsgs.push({ from:'me', text, time });
+  chatMsgs.push({ from:'me', text, category, time });
   input.value = '';
   renderContent();
   try {
     await apiFetch(`/chats/${currentDialog}/messages`, {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, category }),
     });
     await loadChatListFromApi();
   } catch (_) {}
@@ -1286,6 +1595,7 @@ function showSplash() {
 async function bootApp() {
   const app = document.getElementById('app');
   if (!app || !document.getElementById('content')) return;
+  initAuthUI();
   // #region agent log
   const frame = document.getElementById('phone-frame');
   const beforeStyle = frame ? getComputedStyle(frame, '::before') : null;
@@ -1298,14 +1608,16 @@ async function bootApp() {
     homeHeight: afterStyle ? afterStyle.height : null
   });
   // #endregion
-  try {
-    await ensureAuth();
-    connectWs();
-    await Promise.all([loadChatListFromApi(), loadProgressSummary(), refreshLivePoint()]);
-  } catch (_) {}
-  renderNav();
-  renderHeader();
-  renderContent();
+  const ok = await tryResumeSession();
+  if (ok) {
+    setAuthVisible(false);
+    await afterLogin();
+  } else {
+    setAuthVisible(true);
+    renderNav();
+    renderHeader();
+    renderContent();
+  }
   app.style.background = tabGradients.community;
   const content = document.getElementById('content');
   if (content) {

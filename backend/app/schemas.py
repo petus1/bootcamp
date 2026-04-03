@@ -29,8 +29,18 @@ class UserOut(BaseModel):
     avatar_color: str
 
 
+class UserPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    avatar: str
+    avatar_color: str
+
+
 class MessageCreate(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
+    category: str = Field(default="Общее", max_length=80)
 
 
 class MessageOut(BaseModel):
@@ -40,6 +50,7 @@ class MessageOut(BaseModel):
     sender_id: int
     recipient_id: int
     text: str
+    category: str
     created_at: datetime
 
 
@@ -49,6 +60,7 @@ class ChatPreview(BaseModel):
     avatar: str
     avatar_color: str
     last_message: str
+    last_message_category: str
     last_message_at: datetime
 
 
@@ -84,3 +96,13 @@ class ProfilePatch(BaseModel):
 class ProgressSummary(BaseModel):
     messages_sent: int
     points_recorded: int
+
+
+class ChartSeriesOut(BaseModel):
+    labels: list[str]
+    weight: list[float]
+    calories: list[float]
+    movement: list[float]
+    steps: list[float]
+    distance: list[float]
+    activity_time: list[float]

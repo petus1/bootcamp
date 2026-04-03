@@ -34,6 +34,7 @@ def list_chats(current_user: User = Depends(get_current_user), db: Session = Dep
                 avatar=peer.avatar,
                 avatar_color=peer.avatar_color,
                 last_message=m.text,
+                last_message_category=getattr(m, "category", None) or "Общее",
                 last_message_at=m.created_at,
             )
         )
@@ -63,7 +64,13 @@ async def send_message(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    message = ChatMessage(sender_id=current_user.id, recipient_id=user_id, text=payload.text.strip())
+    cat = (payload.category or "Общее").strip() or "Общее"
+    message = ChatMessage(
+        sender_id=current_user.id,
+        recipient_id=user_id,
+        text=payload.text.strip(),
+        category=cat,
+    )
     db.add(message)
     db.commit()
     db.refresh(message)
@@ -74,6 +81,7 @@ async def send_message(
             "sender_id": message.sender_id,
             "recipient_id": message.recipient_id,
             "text": message.text,
+            "category": message.category,
             "created_at": message.created_at.isoformat(),
         },
     }
