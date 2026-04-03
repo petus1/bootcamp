@@ -139,14 +139,14 @@ const posts = [
   { id:6, userId:"2", time:"20 мин назад", text:"Сделал 500 шагов до обеда — уже не ноль! 💪", likes:5, comments:1, liked:false, tag:"Активность" },
 ];
 
-const chatList = [
+let chatList = [
   { userId:"1", lastMsg:"Давай завтра в 7 утра?", time:"15:30", unread:2 },
   { userId:"3", lastMsg:"Спасибо за рецепт! 🙏", time:"14:15", unread:0 },
   { userId:"4", lastMsg:"Как твои успехи?", time:"12:40", unread:1 },
   { userId:"6", lastMsg:"Погнали на марафон вместе!", time:"вчера", unread:0 },
 ];
 
-const chatMsgs = [
+let chatMsgs = [
   { from:"them", text:"Привет! Пойдёшь завтра бегать?", time:"15:20" },
   { from:"me", text:"Привет! Да, давай. Во сколько?", time:"15:22" },
   { from:"them", text:"В 7 утра в парке у озера?", time:"15:25" },
@@ -171,8 +171,137 @@ let currentDialog = null;
 let feedFilter = "all";
 let progressMetric = "weight";
 let debugScrollSamples = 0;
+let authToken = localStorage.getItem("bootcamp_token") || "";
+let ws = null;
+let activeTrackingSessionId = null;
+let currentUserId = null;
+let progressSummary = { messages_sent: 0, points_recorded: 0 };
+let livePoint = null;
+
+const API_BASE = window.API_BASE || "http://127.0.0.1:8000/api/v1";
 
 function getFriend(id) { return friends.find(f => f.id === id); }
+
+function apiHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  return headers;
+}
+
+async function apiFetch(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: { ...apiHeaders(), ...(options.headers || {}) },
+  });
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      detail = payload.detail || detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+  const text = await response.text();
+  return text ? JSON.parse(text) : {};
+}
+
+async function ensureAuth() {
+  if (authToken) {
+    try {
+      const me = await apiFetch("/auth/me");
+      currentUserId = me.id;
+      return;
+    } catch (_) {}
+  }
+  const demoEmail = "demo@bootcamp.local";
+  const demoPassword = "demo1234";
+  try {
+    const registered = await apiFetch("/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ email: demoEmail, password: demoPassword, name: user.name }),
+    });
+    authToken = registered.access_token;
+  } catch (_) {
+    const logged = await apiFetch("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email: demoEmail, password: demoPassword }),
+    });
+    authToken = logged.access_token;
+  }
+  localStorage.setItem("bootcamp_token", authToken);
+  const me = await apiFetch("/auth/me");
+  currentUserId = me.id;
+}
+
+function connectWs() {
+  if (!authToken) return;
+  if (ws) ws.close();
+  const url = API_BASE.replace("http://", "ws://").replace("https://", "wss://").replace("/api/v1", "");
+  ws = new WebSocket(`${url}/ws?token=${encodeURIComponent(authToken)}`);
+  ws.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === "chat:new_message") {
+        const msg = payload.data;
+        const isCurrent =
+          currentDialog && (String(msg.sender_id) === String(currentDialog) || String(msg.recipient_id) === String(currentDialog));
+        if (isCurrent) {
+          chatMsgs.push({
+            from: String(msg.sender_id) === String(currentUserId) ? "me" : "them",
+            text: msg.text,
+            time: new Date(msg.created_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
+          });
+          renderContent();
+        }
+      }
+    } catch (_) {}
+  };
+}
+
+async function loadProgressSummary() {
+  try {
+    progressSummary = await apiFetch("/progress/summary");
+  } catch (_) {}
+}
+
+async function refreshLivePoint() {
+  try {
+    livePoint = await apiFetch("/tracking/live");
+  } catch (_) {}
+}
+
+async function startTracking() {
+  if (!navigator.geolocation) return;
+  try {
+    const started = await apiFetch("/tracking/start", { method: "POST" });
+    activeTrackingSessionId = started.session_id;
+  } catch (_) {
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(async (position) => {
+    try {
+      await apiFetch("/tracking/point", {
+        method: "POST",
+        body: JSON.stringify({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          speed: position.coords.speed,
+        }),
+      });
+      await refreshLivePoint();
+      await loadProgressSummary();
+      renderContent();
+    } catch (_) {}
+  });
+}
+
+async function stopTracking() {
+  activeTrackingSessionId = null;
+  try {
+    await apiFetch("/tracking/stop", { method: "POST" });
+  } catch (_) {}
+}
 
 // #region agent log
 function agentDebugLog(hypothesisId, location, message, data, runId = "run-1") {
@@ -414,6 +543,21 @@ function renderProgress() {
       Движение: <strong>${progressSeries.movement[6]} мин/день</strong><br>
       Шаги: <strong>${progressSeries.steps[6].toLocaleString('ru-RU')} в день</strong>
     </div>
+    <div class="card" style="margin-bottom:12px">
+      <div style="font-weight:700;font-size:14px;margin-bottom:8px">Live-данные backend</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text2)">
+        Отправлено сообщений: <strong style="color:var(--text)">${progressSummary.messages_sent || 0}</strong><br>
+        Точек маршрута: <strong style="color:var(--text)">${progressSummary.points_recorded || 0}</strong><br>
+        Последняя позиция:
+        <strong style="color:var(--text)">
+          ${livePoint ? `${Number(livePoint.lat).toFixed(5)}, ${Number(livePoint.lon).toFixed(5)}` : "нет данных"}
+        </strong>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="chip chip-sm active" onclick="startTracking()">Старт трекинга</button>
+        <button class="chip chip-sm" onclick="stopTracking()">Стоп</button>
+      </div>
+    </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg><span style="font-size:14px;font-weight:500">Текущая неделя</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
     <div class="metric-switch">${[
       ["weight", "Вес"],
@@ -501,7 +645,11 @@ function renderCommunity() {
     <button class="fab" onclick="showCreatePost()">+</button>`;
 }
 
-function setCommunitySubTab(t) { communitySubTab = t; renderContent(); }
+async function setCommunitySubTab(t) {
+  communitySubTab = t;
+  if (t === "chats") await loadChatListFromApi();
+  renderContent();
+}
 
 function isPostInMyLeague(p) {
   if (p.userId === "me") return true;
@@ -544,6 +692,29 @@ function renderChatList() {
     <input placeholder="Поиск друзей..." oninput="filterChats(this.value)">
   </div>
   <div id="chat-list-items">${renderChatItems('')}</div>`;
+}
+
+async function loadChatListFromApi() {
+  try {
+    const rows = await apiFetch("/chats");
+    chatList = rows.map((r) => ({
+      userId: String(r.user_id),
+      lastMsg: r.last_message,
+      time: new Date(r.last_message_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
+      unread: 0,
+    }));
+  } catch (_) {}
+}
+
+async function loadDialogFromApi(userId) {
+  try {
+    const rows = await apiFetch(`/chats/${userId}/messages`);
+    chatMsgs = rows.map((r) => ({
+      from: String(r.sender_id) === String(currentUserId) ? "me" : "them",
+      text: r.text,
+      time: new Date(r.created_at).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
+    }));
+  } catch (_) {}
 }
 
 function renderChatItems(query) {
@@ -591,7 +762,7 @@ function toggleLike(id) {
 
 function setFeedFilter(f) { feedFilter = f; renderContent(); }
 
-function openDialog(userId) {
+async function openDialog(userId) {
   currentDialog = userId;
   const header = document.getElementById('header');
   const nav = document.getElementById('nav');
@@ -604,6 +775,7 @@ function openDialog(userId) {
     navDisplay: nav ? getComputedStyle(nav).display : null
   });
   // #endregion
+  await loadDialogFromApi(userId);
   renderContent();
 }
 
@@ -617,7 +789,7 @@ function closeDialog() {
   renderContent();
 }
 
-function sendMsg() {
+async function sendMsg() {
   const input = document.getElementById('msg-input');
   if (!input || !input.value.trim()) return;
   const text = input.value.trim();
@@ -625,6 +797,13 @@ function sendMsg() {
   chatMsgs.push({ from:'me', text, time });
   input.value = '';
   renderContent();
+  try {
+    await apiFetch(`/chats/${currentDialog}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    await loadChatListFromApi();
+  } catch (_) {}
   const msgs = document.getElementById('msgs');
   if (msgs) msgs.scrollTop = msgs.scrollHeight;
 }
@@ -1104,7 +1283,7 @@ function showSplash() {
 }
 
 // ===== INIT =====
-function bootApp() {
+async function bootApp() {
   const app = document.getElementById('app');
   if (!app || !document.getElementById('content')) return;
   // #region agent log
@@ -1119,6 +1298,11 @@ function bootApp() {
     homeHeight: afterStyle ? afterStyle.height : null
   });
   // #endregion
+  try {
+    await ensureAuth();
+    connectWs();
+    await Promise.all([loadChatListFromApi(), loadProgressSummary(), refreshLivePoint()]);
+  } catch (_) {}
   renderNav();
   renderHeader();
   renderContent();
