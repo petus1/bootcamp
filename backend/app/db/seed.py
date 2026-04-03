@@ -7,12 +7,16 @@ from app.core.security import get_password_hash
 from app.db.models import ChatMessage, Post, PostComment, PostLike, User
 
 DEMO_PASSWORD = "demo1234"
+ACTIVE_EMAIL_DOMAIN = "@bootcamp.app"
+LEGACY_EMAIL_DOMAIN = "@bootcamp.local"
+DEMO_EMAIL = f"demo{ACTIVE_EMAIL_DOMAIN}"
+LEGACY_DEMO_EMAIL = f"demo{LEGACY_EMAIL_DOMAIN}"
 
 DEMO_USERS = [
-    ("ana@bootcamp.local", "Аня", "А", "#E91E63"),
-    ("dima@bootcamp.local", "Дима", "Д", "#3F51B5"),
-    ("masha@bootcamp.local", "Маша", "М", "#9C27B0"),
-    ("sergey@bootcamp.local", "Серёжа", "С", "#FF9800"),
+    ("ana@bootcamp.app", "Аня", "А", "#E91E63"),
+    ("dima@bootcamp.app", "Дима", "Д", "#3F51B5"),
+    ("masha@bootcamp.app", "Маша", "М", "#9C27B0"),
+    ("sergey@bootcamp.app", "Серёжа", "С", "#FF9800"),
 ]
 
 
@@ -66,10 +70,17 @@ def ensure_schema(db: Session) -> None:
 
 def seed_demo(db: Session) -> None:
     ensure_schema(db)
-    demo = db.execute(select(User).where(User.email == "demo@bootcamp.local")).scalar_one_or_none()
+    demo = db.execute(select(User).where(User.email == DEMO_EMAIL)).scalar_one_or_none()
+    if not demo:
+        # Migrate legacy local-domain demo account to a valid domain.
+        demo = db.execute(select(User).where(User.email == LEGACY_DEMO_EMAIL)).scalar_one_or_none()
+        if demo:
+            demo.email = DEMO_EMAIL
+            db.commit()
+            db.refresh(demo)
     if not demo:
         demo = User(
-            email="demo@bootcamp.local",
+            email=DEMO_EMAIL,
             password_hash=get_password_hash(DEMO_PASSWORD),
             name="Демо-пользователь",
             avatar="Д",
@@ -82,6 +93,14 @@ def seed_demo(db: Session) -> None:
     peers: list[User] = []
     for email, name, av, color in DEMO_USERS:
         u = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if not u:
+            legacy_email = email.replace(ACTIVE_EMAIL_DOMAIN, LEGACY_EMAIL_DOMAIN)
+            # Migrate legacy local-domain peer accounts to valid domain.
+            u = db.execute(select(User).where(User.email == legacy_email)).scalar_one_or_none()
+            if u:
+                u.email = email
+                db.commit()
+                db.refresh(u)
         if not u:
             u = User(
                 email=email,

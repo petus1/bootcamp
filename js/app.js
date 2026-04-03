@@ -285,6 +285,7 @@ let aiChatMessages = [
 const MESSAGE_CATEGORIES = ["Общее", "Спорт", "Питание", "Мотивация", "Советы", "Рецепт"];
 
 const API_BASE = window.API_BASE || "http://127.0.0.1:8000/api/v1";
+const DEBUG_INGEST_URL = window.DEBUG_INGEST_URL || "";
 
 function escapeHtml(s) {
     const d = document.createElement("div");
@@ -318,15 +319,27 @@ function apiHeaders() {
 }
 
 async function apiFetch(path, options = {}) {
-    const response = await fetch(`${API_BASE}${path}`, {
-        ...options,
-        headers: {...apiHeaders(), ...(options.headers || {})},
-    });
+    let response;
+    try {
+        response = await fetch(`${API_BASE}${path}`, {
+            ...options,
+            headers: {...apiHeaders(), ...(options.headers || {})},
+        });
+    } catch (_) {
+        throw new Error(`Не удалось подключиться к API (${API_BASE}). Проверьте, что backend запущен.`);
+    }
     if (!response.ok) {
         let detail = `HTTP ${response.status}`;
         try {
             const payload = await response.json();
-            detail = payload.detail || detail;
+            if (typeof payload?.detail === "string") {
+                detail = payload.detail;
+            } else if (Array.isArray(payload?.detail) && payload.detail.length) {
+                const first = payload.detail[0];
+                if (typeof first?.msg === "string" && first.msg) {
+                    detail = first.msg;
+                }
+            }
         } catch (_) {
         }
         throw new Error(detail);
@@ -591,7 +604,7 @@ function initAuthUI() {
 
     demo?.addEventListener("click", async () => {
         showErr("");
-        const demoEmail = "demo@bootcamp.local";
+        const demoEmail = "demo@bootcamp.app";
         const demoPassword = "demo1234";
         try {
             try {
@@ -759,7 +772,8 @@ async function stopTracking() {
 
 // #region agent log
 function agentDebugLog(hypothesisId, location, message, data, runId = "run-1") {
-    fetch('http://127.0.0.1:7901/ingest/e375e2ad-47db-4633-be57-d00484c4df7c', {
+    if (!DEBUG_INGEST_URL) return;
+    fetch(DEBUG_INGEST_URL, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-Debug-Session-Id': '46283f'},
         body: JSON.stringify({sessionId: '46283f', runId, hypothesisId, location, message, data, timestamp: Date.now()})
