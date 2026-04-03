@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Худеем на здоровье — Прототип</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="device-switcher">
+  <button type="button" class="device-btn active" data-device="phone" onclick="setDevice('phone')">📱 Телефон</button>
+  <button type="button" class="device-btn" data-device="tablet" onclick="setDevice('tablet')">📋 Планшет</button>
+  <button type="button" class="device-btn" data-device="pc" onclick="setDevice('pc')">💻 ПК</button>
+</div>
+
+<div class="phone-frame" id="phone-frame">
+  <div class="app" id="app">
+    <div class="header" id="header">
+      <div class="header-spacer"></div>
+      <span class="header-title" id="header-title">Сообщество</span>
+      <div id="header-right" class="header-spacer"></div>
+    </div>
+    <div class="content" id="content"></div>
+    <div class="nav" id="nav"></div>
+  </div>
+</div>
+
+<script src="js/app.js" defer></script>
+</body>
+</html>
