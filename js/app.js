@@ -1,7 +1,7 @@
 ﻿// ===== DATA =====
 const user = {
-  name: "Никита", email: "samodurov.nikita@inbox.ru", avatar: "Н", avatarColor: "#2BC4A7",
-  weight: 90, goalWeight: 70,
+  name: "Иван", email: "ivan.ivanov@inbox.ru", avatar: "И", avatarColor: "#2BC4A7",
+  weight: 100, goalWeight: 70,
   flames: 20,
   recordFlames: 24,
   streakDays: 12,
