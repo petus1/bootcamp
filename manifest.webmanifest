@@ -1,0 +1,9 @@
+{
+  "name": "Bootcamp MVP",
+  "short_name": "Bootcamp",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2BC4A7",
+  "icons": []
+}
