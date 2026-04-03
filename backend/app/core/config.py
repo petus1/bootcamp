@@ -12,8 +12,6 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+pysqlite:///./bootcamp.db"
     redis_url: str = "redis://redis:6379/0"
-    # Список через запятую. Для GitHub Pages: https://USER.github.io
-    # Пример: CORS_ORIGINS=https://myuser.github.io,http://127.0.0.1:8080
     cors_origins: str = "*"
 
 

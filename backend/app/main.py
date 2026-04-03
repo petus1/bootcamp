@@ -23,12 +23,10 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-# Bearer в заголовке — cookies не используем; allow_credentials=True + allow_origins=["*"]
-# несовместимы по спецификации CORS и ломают fetch с Authorization в части браузеров.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[x.strip() for x in settings.cors_origins.split(",")],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
