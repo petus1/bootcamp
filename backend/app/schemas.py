@@ -106,3 +106,32 @@ class ChartSeriesOut(BaseModel):
     steps: list[float]
     distance: list[float]
     activity_time: list[float]
+
+
+class PostCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    tag: str = Field(default="Общее", max_length=80)
+    emoji: str | None = Field(default=None, max_length=16)
+
+
+class PostOut(BaseModel):
+    id: int
+    author: UserPublic
+    text: str
+    tag: str
+    emoji: str | None = None
+    created_at: datetime
+    likes: int
+    comments: int
+    liked_by_me: bool
+
+
+class CommentCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class CommentOut(BaseModel):
+    id: int
+    author: UserPublic
+    text: str
+    created_at: datetime

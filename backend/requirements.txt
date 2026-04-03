@@ -5,6 +5,8 @@ psycopg[binary]
 alembic
 python-jose[cryptography]
 passlib[bcrypt]
+# bcrypt 4.1+ ломает passlib при инициализации (detect_wrap_bug / 72 bytes)
+bcrypt>=4.0.1,<4.1
 pydantic-settings
 python-multipart
 redis

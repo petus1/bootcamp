@@ -19,7 +19,7 @@ const user = {
     { icon:"💧", title:"Вода", target:2, progress:0, unit:"л", step:0.5, color:"#2196F3", reason:"🤖 Вы пьёте мало воды, это замедляет метаболизм", done:false },
   ],
 };
-const friends = [
+let friends = [
   { id:"1", name:"Аня", avatar:"А", avatarColor:"#E91E63", flames:48, recordFlames:52, todayActive:true },
   { id:"2", name:"Дима", avatar:"Д", avatarColor:"#3F51B5", flames:10, recordFlames:18, todayActive:false },
   { id:"3", name:"Маша", avatar:"М", avatarColor:"#9C27B0", flames:82, recordFlames:82, todayActive:true },
@@ -178,6 +178,8 @@ let currentUserId = null;
 let progressSummary = { messages_sent: 0, points_recorded: 0 };
 let livePoint = null;
 let chartSeriesFromApi = null;
+let feedPosts = [];
+let feedLoaded = false;
 let geoWatchId = null;
 let lastTrackSent = 0;
 let trackingUiTimer = null;
@@ -285,11 +287,130 @@ async function loadChartSeries() {
   }
 }
 
+async function loadFeedPosts() {
+  try {
+    feedPosts = await apiFetch("/feed/posts");
+    feedLoaded = true;
+  } catch (_) {
+    feedPosts = [];
+    feedLoaded = false;
+  }
+}
+
+async function createFeedPost({ text, tag, emoji }) {
+  const p = await apiFetch("/feed/posts", {
+    method: "POST",
+    body: JSON.stringify({ text, tag, emoji }),
+  });
+  feedPosts = [p, ...feedPosts];
+}
+
+async function toggleFeedLike(postId) {
+  await apiFetch(`/feed/posts/${postId}/like`, { method: "POST" });
+  await loadFeedPosts();
+  renderContent();
+}
+
+async function openComments(postId) {
+  try {
+    const comments = await apiFetch(`/feed/posts/${postId}/comments`);
+    showCommentsModal(postId, comments);
+  } catch (_) {}
+}
+
+function showCommentsModal(postId, comments) {
+  document.querySelectorAll(".comments-overlay").forEach((e) => e.remove());
+  const overlay = document.createElement("div");
+  overlay.className = "comments-overlay";
+  overlay.style.cssText =
+    "position:absolute;inset:0;background:rgba(0,0,0,0.35);z-index:200;display:flex;align-items:flex-end;justify-content:center;animation:fadeIn 0.2s ease";
+  overlay.onclick = (e) => {
+    if (e.target === overlay) overlay.remove();
+  };
+  const list = comments
+    .map(
+      (c) => `<div class="card" style="margin-bottom:8px;padding:12px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <div class="letter-ava" style="width:30px;height:30px;font-size:13px;background:${c.author.avatar_color}">${escapeHtml(
+        c.author.avatar
+      )}</div>
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:13px">${escapeHtml(c.author.name)}</div>
+            <div style="font-size:11px;color:var(--text2)">${new Date(c.created_at).toLocaleString("ru-RU", {
+              hour: "2-digit",
+              minute: "2-digit",
+              day: "2-digit",
+              month: "2-digit",
+            })}</div>
+          </div>
+        </div>
+        <div style="font-size:14px;line-height:1.5">${escapeHtml(c.text)}</div>
+      </div>`
+    )
+    .join("");
+  overlay.innerHTML = `
+    <div class="create-post-sheet" style="border-radius:24px 24px 0 0;max-height:78vh;overflow:auto">
+      <div style="display:flex;justify-content:center;margin-bottom:8px"><div style="width:40px;height:4px;border-radius:2px;background:#DDD"></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-size:16px;font-weight:800">Комментарии</div>
+        <button onclick="this.closest('.comments-overlay').remove()" style="background:none;border:none;cursor:pointer">${iconSvg(
+          "close"
+        )}</button>
+      </div>
+      <div id="comments-list">${list || '<div style="padding:18px;text-align:center;color:var(--text2)">Пока нет комментариев</div>'}</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input id="comment-input" class="auth-input" style="margin:0;flex:1" placeholder="Напишите комментарий...">
+        <button class="auth-btn auth-btn-primary" style="flex:0 0 auto;padding:12px 16px" onclick="sendComment(${postId})">Отправить</button>
+      </div>
+    </div>`;
+  document.querySelector(".app").appendChild(overlay);
+  setTimeout(() => document.getElementById("comment-input")?.focus(), 50);
+}
+
+async function sendComment(postId) {
+  const inp = document.getElementById("comment-input");
+  if (!inp || !inp.value.trim()) return;
+  const text = inp.value.trim();
+  inp.value = "";
+  try {
+    await apiFetch(`/feed/posts/${postId}/comments`, { method: "POST", body: JSON.stringify({ text }) });
+    const comments = await apiFetch(`/feed/posts/${postId}/comments`);
+    const listEl = document.getElementById("comments-list");
+    if (listEl) {
+      listEl.innerHTML =
+        comments
+          .map(
+            (c) => `<div class="card" style="margin-bottom:8px;padding:12px">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+                <div class="letter-ava" style="width:30px;height:30px;font-size:13px;background:${c.author.avatar_color}">${escapeHtml(
+        c.author.avatar
+      )}</div>
+                <div style="flex:1">
+                  <div style="font-weight:700;font-size:13px">${escapeHtml(c.author.name)}</div>
+                  <div style="font-size:11px;color:var(--text2)">${new Date(c.created_at).toLocaleString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    day: "2-digit",
+                    month: "2-digit",
+                  })}</div>
+                </div>
+              </div>
+              <div style="font-size:14px;line-height:1.5">${escapeHtml(c.text)}</div>
+            </div>`
+          )
+          .join("") || '<div style="padding:18px;text-align:center;color:var(--text2)">Пока нет комментариев</div>';
+    }
+    await loadFeedPosts();
+    renderContent();
+  } catch (_) {}
+}
+
 async function afterLogin() {
   connectWs();
   await Promise.all([
     loadFriendsFromApi(),
     loadChatListFromApi(),
+    loadFeedPosts(),
     loadProgressSummary(),
     loadChartSeries(),
     refreshLivePoint(),
@@ -962,7 +1083,7 @@ function renderFeed() {
   const leagueFriends = friends.filter(f => sameLeague(f.flames, user.flames));
   const allUsers = [{ id: "me", ...user }, ...leagueFriends];
   const filters=[{id:"all",label:"Все"},{id:"Активность",label:"Активность"},{id:"Рецепт",label:"Рецепты"},{id:"Мотивация",label:"Мотивация"},{id:"Результат",label:"Результаты"}];
-  const inLeaguePosts = posts.filter(isPostInMyLeague);
+  const inLeaguePosts = feedLoaded ? feedPosts : posts.filter(isPostInMyLeague);
   const filtered = feedFilter === 'all' ? inLeaguePosts : inLeaguePosts.filter(p => p.tag === feedFilter);
 
   return `
@@ -970,17 +1091,27 @@ function renderFeed() {
     <div class="stories">${allUsers.map(u=>`<div class="story"><div class="story-ring ${(u.flames||0)>0?'':'no-streak'}"><div class="story-avatar" style="position:relative"><div class="letter-ava" style="width:43px;height:43px;font-size:18px;background:${u.avatarColor||'#2BC4A7'}">${u.avatar}</div>${u.todayActive?'<div class="today-dot"></div>':''}</div>${(u.flames||0)>0?`<div class="story-badge">🔥${u.flames}</div>`:''}</div><span class="story-name">${u.id==='me'?'Вы':u.name}</span></div>`).join('')}</div>
     <div style="height:1px;background:var(--border)"></div>
     <div style="display:flex;gap:6px;padding:10px 16px;overflow-x:auto">${filters.map(f=>`<button class="chip chip-sm ${feedFilter===f.id?'active':''}" onclick="setFeedFilter('${f.id}')">${f.label}</button>`).join('')}</div>
-    ${filtered.map(p=>{const u=p.userId==="me"?{id:"me",...user}:getFriend(p.userId);if(!u)return'';const ts=tagStyleFor(p.tag);return `<div class="card post">
+    ${filtered.map(p=>{
+      const isApi = !!p.author;
+      const u = isApi ? { id: String(p.author.id), name: p.author.name, avatar: p.author.avatar, avatarColor: p.author.avatar_color, flames: 0 } : (p.userId==="me"?{id:"me",...user}:getFriend(p.userId));
+      if(!u) return '';
+      const ts=tagStyleFor(p.tag);
+      const pid = isApi ? p.id : p.id;
+      const likes = isApi ? p.likes : p.likes;
+      const comments = isApi ? p.comments : p.comments;
+      const liked = isApi ? p.liked_by_me : p.liked;
+      const timeText = isApi ? new Date(p.created_at).toLocaleString('ru-RU', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit' }) : p.time;
+      return `<div class="card post">
       <div class="post-header">
         <div class="letter-ava" style="width:38px;height:38px;font-size:15px;background:${u.avatarColor}">${u.avatar}</div>
-        <div style="flex:1"><div style="display:flex;align-items:center"><span class="post-name">${u.name}</span><span class="post-streak">🔥${u.flames||0}</span></div><span class="post-time">${p.time}</span></div>
+        <div style="flex:1"><div style="display:flex;align-items:center"><span class="post-name">${escapeHtml(u.name)}</span>${!isApi?`<span class="post-streak">🔥${u.flames||0}</span>`:''}</div><span class="post-time">${timeText}</span></div>
         ${p.tag?`<span class="post-tag" style="background:${ts.bg};color:${ts.text}">${p.tag}</span>`:''}
       </div>
-      <p class="post-text">${p.text}</p>
-      ${p.emoji?`<div class="post-emoji">${p.emoji}</div>`:''}
+      <p class="post-text">${escapeHtml(p.text)}</p>
+      ${p.emoji?`<div class="post-emoji">${escapeHtml(p.emoji)}</div>`:''}
       <div class="post-actions">
-        <button class="post-btn ${p.liked?'liked':''}" onclick="toggleLike(${p.id})">${p.liked?iconSvg('heartFilled'):iconSvg('heart')} ${p.likes}</button>
-        <button class="post-btn">${iconSvg('comment')} ${p.comments}</button>
+        <button class="post-btn ${liked?'liked':''}" onclick="${isApi?`toggleFeedLike(${pid})`:`toggleLike(${pid})`}">${liked?iconSvg('heartFilled'):iconSvg('heart')} ${likes}</button>
+        <button class="post-btn" onclick="${isApi?`openComments(${pid})`:`openComments(${pid})`}">${iconSvg('comment')} ${comments}</button>
       </div>
     </div>`}).join('')}
     <div style="height:16px"></div>`;
@@ -1067,7 +1198,14 @@ function toggleLike(id) {
   renderContent();
 }
 
-function setFeedFilter(f) { feedFilter = f; renderContent(); }
+function setFeedFilter(f) {
+  feedFilter = f;
+  if (communitySubTab === "feed" && authToken) {
+    loadFeedPosts().then(() => renderContent());
+  } else {
+    renderContent();
+  }
+}
 
 async function openDialog(userId) {
   currentDialog = userId;
@@ -1562,14 +1700,25 @@ function selectPostTag(tag) {
 function submitPost() {
   const text = document.getElementById('new-post-text')?.value?.trim();
   if (!text) return;
-  posts.unshift({
-    id: Date.now(), userId: "me", time: "только что",
-    text: text, likes: 0, comments: 0, liked: false, tag: selectedPostTag
-  });
-  document.querySelectorAll('.create-post-overlay').forEach(e=>e.remove());
-  communitySubTab = 'feed';
-  feedFilter = 'all';
-  renderContent();
+  const emojiMatch = text.match(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u);
+  const emoji = emojiMatch ? emojiMatch[0] : null;
+  (async () => {
+    try {
+      if (authToken) {
+        await createFeedPost({ text, tag: selectedPostTag, emoji });
+      } else {
+        posts.unshift({
+          id: Date.now(), userId: "me", time: "только что",
+          text: text, likes: 0, comments: 0, liked: false, tag: selectedPostTag, emoji
+        });
+      }
+    } catch (_) {}
+    document.querySelectorAll('.create-post-overlay').forEach(e=>e.remove());
+    communitySubTab = 'feed';
+    feedFilter = 'all';
+    if (authToken) await loadFeedPosts();
+    renderContent();
+  })();
 }
 
 function showSplash() {

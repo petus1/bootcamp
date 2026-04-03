@@ -4,7 +4,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.security import get_password_hash
-from app.db.models import ChatMessage, User
+from app.db.models import ChatMessage, Post, PostComment, PostLike, User
 
 
 DEMO_PASSWORD = "demo1234"
@@ -27,6 +27,42 @@ def ensure_schema(db: Session) -> None:
     if "category" not in col_names:
         db.execute(text("ALTER TABLE chat_messages ADD COLUMN category VARCHAR(80) NOT NULL DEFAULT 'Общее'"))
         db.commit()
+
+    # Create feed tables if missing (SQLite-only bootstrap)
+    db.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS posts ("
+            "id INTEGER PRIMARY KEY, "
+            "author_id INTEGER NOT NULL, "
+            "text TEXT NOT NULL, "
+            "tag VARCHAR(80) NOT NULL DEFAULT 'Общее', "
+            "emoji VARCHAR(16) NULL, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+    )
+    db.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS post_likes ("
+            "id INTEGER PRIMARY KEY, "
+            "post_id INTEGER NOT NULL, "
+            "user_id INTEGER NOT NULL, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+    )
+    db.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS post_comments ("
+            "id INTEGER PRIMARY KEY, "
+            "post_id INTEGER NOT NULL, "
+            "author_id INTEGER NOT NULL, "
+            "text TEXT NOT NULL, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+    )
+    db.commit()
 
 
 def seed_demo(db: Session) -> None:
@@ -96,3 +132,24 @@ def seed_demo(db: Session) -> None:
             )
         )
         db.commit()
+
+    # Feed seed (idempotent-ish)
+    existing_posts = db.execute(select(func.count(Post.id))).scalar_one()
+    if existing_posts == 0:
+        demo_posts = [
+            ("Активность", "Утренняя пробежка 5 км по парку! Кто со мной завтра? 🌤", None),
+            ("Рецепт", "Сделала ПП-пиццу на цветной капусте — вкусно и легко 🍕", "🍕"),
+            ("Мотивация", "Неделя без пропусков! Маленькие шаги каждый день дают результат.", "🔥"),
+        ]
+        created = []
+        for tag, text_body, emoji in demo_posts:
+            p = Post(author_id=demo.id, text=text_body, tag=tag, emoji=emoji)
+            db.add(p)
+            db.commit()
+            db.refresh(p)
+            created.append(p)
+        if created:
+            db.add(PostComment(post_id=created[0].id, author_id=peers[0].id, text="Круто! Я тоже хочу начать."))
+            db.add(PostLike(post_id=created[0].id, user_id=peers[1].id))
+            db.add(PostLike(post_id=created[0].id, user_id=demo.id))
+            db.commit()
