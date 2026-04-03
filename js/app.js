@@ -190,7 +190,16 @@ let aiChatMessages = [
 
 const MESSAGE_CATEGORIES = ["Общее", "Спорт", "Питание", "Мотивация", "Советы", "Рецепт"];
 
-const API_BASE = window.API_BASE || "http://127.0.0.1:8000/api/v1";
+function resolveApiBase() {
+  if (window.API_BASE) return window.API_BASE.replace(/\/$/, "");
+  const meta = document.querySelector('meta[name="api-base"]');
+  if (meta && meta.getAttribute("content")) {
+    return meta.getAttribute("content").trim().replace(/\/$/, "");
+  }
+  return "http://127.0.0.1:8000/api/v1";
+}
+
+const API_BASE = resolveApiBase();
 
 function escapeHtml(s) {
   const d = document.createElement("div");
@@ -221,18 +230,32 @@ function apiHeaders() {
   return headers;
 }
 
+function formatApiErrorDetail(payload) {
+  if (!payload || payload.detail === undefined || payload.detail === null) return null;
+  const d = payload.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) {
+    return d
+      .map((x) => (typeof x === "object" && x.msg ? x.msg : JSON.stringify(x)))
+      .filter(Boolean)
+      .join(" ");
+  }
+  if (typeof d === "object") return d.msg || JSON.stringify(d);
+  return String(d);
+}
+
 async function apiFetch(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: { ...apiHeaders(), ...(options.headers || {}) },
   });
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
+    let msg = `HTTP ${response.status}`;
     try {
       const payload = await response.json();
-      detail = payload.detail || detail;
+      msg = formatApiErrorDetail(payload) || msg;
     } catch (_) {}
-    throw new Error(detail);
+    throw new Error(msg);
   }
   const text = await response.text();
   return text ? JSON.parse(text) : {};
@@ -423,6 +446,8 @@ async function afterLogin() {
 }
 
 function initAuthUI() {
+  if (window.__bootcampAuthUiInited) return;
+  window.__bootcampAuthUiInited = true;
   const submit = document.getElementById("auth-submit");
   const toggle = document.getElementById("auth-toggle");
   const demo = document.getElementById("auth-demo");
@@ -487,7 +512,22 @@ function initAuthUI() {
     }
   }
 
-  submit?.addEventListener("click", doAuth);
+  submit?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    doAuth();
+  });
+  document.getElementById("auth-password")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      doAuth();
+    }
+  });
+  document.getElementById("auth-email")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      document.getElementById("auth-password")?.focus();
+    }
+  });
 
   demo?.addEventListener("click", async () => {
     showErr("");

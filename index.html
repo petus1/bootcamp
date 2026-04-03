@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#2BC4A7">
+  <!-- Для GitHub Pages: укажите HTTPS URL API, например https://your-api.onrender.com/api/v1 -->
+  <meta name="api-base" content="">
   <title>Худеем на здоровье — Прототип</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="styles.css">
@@ -47,10 +49,12 @@
   </div>
 </div>
 
+<!-- Раскомментируйте и подставьте публичный API (HTTPS), если meta api-base не используете: -->
+<!-- <script>window.API_BASE = "https://your-api.example.com/api/v1";</script> -->
 <script src="js/app.js" defer></script>
 <script>
   if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+    window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
   }
 </script>
 </body>
