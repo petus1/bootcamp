@@ -260,7 +260,7 @@ function renderHeader() {
 // ===== SCREENS =====
 // ===== TAB GRADIENTS =====
 const tabGradients = {
-  profile:   'linear-gradient(140deg, #A5D6A7 0%, #C8E6C9 30%, #E8F5E9 55%, #FFFDE7 100%)',
+  profile:   '#B7ABD9',
   diary:     'linear-gradient(140deg, #FFCC80 0%, #FFE0B2 30%, #FFF8E1 60%, #FFFDE7 100%)',
   community: 'linear-gradient(140deg, #80DEEA 0%, #B2EBF2 25%, #A5D6A7 55%, #E8F5E9 100%)',
   progress:  'linear-gradient(140deg, #9FA8DA 0%, #B3E5FC 35%, #E1F5FE 65%, #EDE7F6 100%)',
@@ -285,6 +285,7 @@ function switchTab(id) {
 function renderContent() {
   const c = document.getElementById('content');
   if (!c) return;
+  c.classList.toggle('dialog-open', currentTab === 'community' && !!currentDialog);
   // #region agent log
   const header = document.getElementById('header');
   const nav = document.getElementById('nav');

@@ -1,5 +1,5 @@
 ﻿:root {
-  --teal: #B7ABD9;
+  --teal: #2BC4A7;
   --teal-light: #E8F8F4;
   --teal-dark: #1FA88E;
   --lavender: #E8D8F0;
@@ -42,8 +42,7 @@ body { background: #1A1A2E; font-family: -apple-system, 'SF Pro Display', 'Segoe
 
 /* Dynamic Island / Notch */
 .phone-frame::before {
-  content: ''; position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
-  width: 120px; height: 28px; background: #000; border-radius: 20px; z-index: 300;
+  display: none;
 }
 
 /* Home indicator */
@@ -93,6 +92,7 @@ body { background: #1A1A2E; font-family: -apple-system, 'SF Pro Display', 'Segoe
 
 /* Content */
 .content { flex: 1; overflow-y: auto; overflow-x: hidden; }
+.content.dialog-open { display: flex; flex-direction: column; overflow: hidden; }
 
 /* Bottom nav */
 .nav {
@@ -207,6 +207,13 @@ body { background: #1A1A2E; font-family: -apple-system, 'SF Pro Display', 'Segoe
 .dialog-input input { flex: 1; border: 1px solid var(--border); border-radius: 24px; padding: 10px 16px; font-size: 14px; outline: none; background: var(--bg); }
 .dialog-input input:focus { border-color: var(--teal); }
 .dialog-input button { background: none; border: none; cursor: pointer; padding: 4px; }
+
+/* Keep chat input pinned to bottom on small screens/keyboards */
+@media (max-width: 480px) {
+  .dialog-input {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+}
 
 /* Streak popup */
 .streak-backdrop { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 100; animation: fadeIn 0.2s ease; }
